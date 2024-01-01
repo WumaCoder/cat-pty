@@ -2,10 +2,10 @@ use nix::fcntl::{open, OFlag};
 use nix::pty::{grantpt, posix_openpt, ptsname, unlockpt};
 use nix::sys::stat::Mode;
 use nix::unistd::{close, dup, dup2, setsid, write};
-use std::{ffi::CString, os::fd::AsRawFd, thread, time::Duration};
+use std::{borrow::BorrowMut, ffi::CString, fmt::format, os::fd::AsRawFd, thread, time::Duration};
+use tokio::{sync::mpsc, time::sleep};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 打开伪终端主设备
+fn create_pty() -> Result<(), Box<dyn std::error::Error>> {
     let master_fd = posix_openpt(OFlag::O_RDWR)?;
 
     // 将主设备授予子进程
@@ -39,10 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             write(master_fd.as_raw_fd(), "echo 'Hello, World!'".as_bytes()).unwrap();
             write(master_fd.as_raw_fd(), "\n".as_bytes()).unwrap();
-            write(master_fd.as_raw_fd(), "zsh".as_bytes()).unwrap();
-            write(master_fd.as_raw_fd(), "\n".as_bytes()).unwrap();
-            write(master_fd.as_raw_fd(), "echo 'Hello, World!'".as_bytes()).unwrap();
-            write(master_fd.as_raw_fd(), "\n".as_bytes()).unwrap();
+            // write(master_fd.as_raw_fd(), "exit".as_bytes()).unwrap();
+            // write(master_fd.as_raw_fd(), "\n".as_bytes()).unwrap();
 
             // 等待子进程完成
             let status = nix::sys::wait::waitpid(child, None)?;
@@ -75,6 +73,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             unsafe { nix::libc::_exit(1) };
         }
     }
-
     Ok(())
+}
+
+use axum::{
+    extract::{
+        ws::{Message, WebSocket},
+        WebSocketUpgrade,
+    },
+    response::Response,
+    routing::get,
+    Router,
+};
+
+#[tokio::main]
+async fn main() {
+    // build our application with a single route
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, World!" }))
+        .route("/ws", get(handler));
+
+    // run our app with hyper, listening globally on port 3000
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn handler(ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(handle_socket)
+}
+
+async fn handle_socket(mut socket: WebSocket) {
+    let sid = format!("{}", chrono::Local::now().timestamp_millis()); // 时间戳
+    println!("new websocket connection: {}", sid);
+
+    let (tx, mut rx) = mpsc::channel::<String>(1024);
+
+    // tokio::task::spawn(async move {
+    //     // create_pty(tx).unwrap();
+    //     loop {
+    //         tx.send("hello".to_string()).await.unwrap();
+    //         thread::sleep(Duration::from_secs(1));
+    //     }
+    // });
+
+    // tokio::spawn(async move {
+    //     // 读取 rx
+    //     while let Some(i) = rx.recv().await {
+    //         println!("got = {}", i);
+    //         thread::sleep(Duration::from_secs(1));
+    //     }
+    // });
+
+    tokio::task::spawn(async move {
+        for i in 0..10 {
+            println!("send = {}", i);
+            if let Err(_) = tx.send(format!("{}", i)).await {
+                println!("receiver dropped");
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    while let Some(i) = rx.recv().await {
+        println!("got = {}", i);
+    }
+
+    while let Some(msg) = socket.recv().await {
+        let msg = if let Ok(msg) = msg {
+            msg
+        } else {
+            // client disconnected
+            return;
+        };
+        println!("uid:{} recv: {:?}", sid, msg);
+
+        if socket
+            .send(Message::Text(format!("uid:{} acc: {:?}", sid, msg)))
+            .await
+            .is_err()
+        {
+            // client disconnected
+            return;
+        }
+    }
 }

@@ -6,8 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-nix = {version = "0.27.1", features = ["process", "term", "fs"]}
+nix = { version = "0.27.1", features = ["process", "term", "fs", "ptrace"] }
 tokio = { version = "1", features = ["full"] }
 ws = "0.9.2"
 rexpect = "0.5"
 crossterm = "0.27.0"
+axum = { version = "0.7.3", features = ["ws"] }
+chrono = "*"
+uuid = "1.6.1"
